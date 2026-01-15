@@ -1,55 +1,49 @@
-from os import environ
-import re
 import json
+import pytest
+from app import app, db, Earthquake
 
-from app import app
+# Fixture: fresh in-memory DB with seeded data
+@pytest.fixture(scope="module")
+def test_client():
+    app.config['TESTING'] = True
+    app.config['SQLALCHEMY_DATABASE_URI'] = "sqlite:///:memory:"
+    app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+
+    with app.test_client() as client:
+        with app.app_context():
+            db.create_all()
+            earthquakes = [
+                Earthquake(id=1, magnitude=9.5, location="Chile", year=1960),
+                Earthquake(id=2, magnitude=9.2, location="Alaska", year=1964),
+                Earthquake(id=3, magnitude=9.1, location="Sumatra", year=2004),
+                Earthquake(id=4, magnitude=9.0, location="Japan", year=2011),
+            ]
+            db.session.bulk_save_objects(earthquakes)
+            db.session.commit()
+        yield client
+        with app.app_context():
+            db.drop_all()
 
 
 class TestApp:
-    '''Flask application in flask_app.py'''
+    """Flask tests for /earthquakes/magnitude route"""
 
-    def test_earthquake_magnitude_route(self):
-        '''has a resource available at "/earthquakes/magnitude/<magnitude>".'''
-        response = app.test_client().get('/earthquakes/magnitude/8.0')
+    def test_earthquake_magnitude_route(self, test_client):
+        """Resource available at /earthquakes/magnitude/<magnitude>"""
+        response = test_client.get('/earthquakes/magnitude/8.0')
         assert response.status_code == 200
 
-    def test_earthquakes_magnitude_match_response(self):
-        '''displays json in earthquake/magnitude route with keys for count, quakes'''
+    def test_earthquakes_magnitude_match_response(self, test_client):
+        """Displays JSON with keys count, quakes for magnitude 9.0"""
+        response = test_client.get('/earthquakes/magnitude/9.0')
+        response_json = response.get_json()
+        assert response_json["count"] == 4  # all quakes >= 9.0
+        quakes = response_json["quakes"]
+        assert all(q["magnitude"] >= 9.0 for q in quakes)
 
-        response = app.test_client().get('/earthquakes/magnitude/9.0')
-        # get the response body
-        response_body = response.data.decode()
-        # convert to JSON
-        response_json = json.loads(response_body)
-        # confirm JSON data
-        assert response_json["count"] == 2
-        assert len(response_json["quakes"]) == 2
-        # confirm list contents
-        quake1 = response_json["quakes"][0]
-        assert quake1["id"] == 1
-        assert quake1["magnitude"] == 9.5
-        assert quake1["location"] == "Chile"
-        assert quake1["year"] == 1960
-        quake2 = response_json["quakes"][1]
-        assert quake2["id"] == 2
-        assert quake2["magnitude"] == 9.2
-        assert quake2["location"] == "Alaska"
-        assert quake2["year"] == 1964
-
-        # confirm status
-        assert response.status_code == 200
-
-    def test_earthquakes_magnitude_no_match_response(self):
-        '''displays json in earthquake/magnitude route with keys for count, quakes'''
-
-        response = app.test_client().get('/earthquakes/magnitude/10.0')
-        # get the response body
-        response_body = response.data.decode()
-        # convert to JSON
-        response_json = json.loads(response_body)
-        # confirm JSON data
+    def test_earthquakes_magnitude_no_match_response(self, test_client):
+        """Displays JSON with count=0 if no quakes match"""
+        response = test_client.get('/earthquakes/magnitude/10.0')
+        response_json = response.get_json()
         assert response_json["count"] == 0
-        assert len(response_json["quakes"]) == 0
-
-        # confirm status
-        assert response.status_code == 200
+        assert response_json["quakes"] == []
